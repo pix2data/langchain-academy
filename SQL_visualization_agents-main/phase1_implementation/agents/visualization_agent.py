@@ -43,13 +43,15 @@ determine the best plot configuration. You must respond with ONLY a valid JSON o
 
 {
   "plot_type": "bar|line|scatter|histogram|box|table",
-  "x_column": "column_name",
-  "y_column": "column_name", 
-  "color_column": "column_name or null",
+  "x_column": "exact_column_name_from_data",
+  "y_column": "exact_column_name_from_data", 
+  "color_column": "exact_column_name_from_data or null",
   "barmode": "group|stack|overlay|null",
   "orientation": "v|h|null",
   "reasoning": "brief explanation of choice"
 }
+
+CRITICAL: You must use ONLY the exact column names provided in the data. Do NOT make up column names.
 
 Available plot types and when to use them:
 - bar: comparing categories, showing totals/counts (use barmode: "group" for side-by-side, "stack" for stacked)
@@ -65,7 +67,7 @@ Barmode options:
 - "overlay": bars overlapping (rarely used)
 - null: single series bar chart
 
-Choose columns that best match the user's intent. Prefer meaningful column names for axes."""
+IMPORTANT: Only use column names that exist in the provided data. Look at the "Column Details" section below for exact column names."""
 
     data_summary = f"""
 User Request: {user_request}
@@ -169,19 +171,121 @@ def _fallback_plot_spec(data_characteristics: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+def _validate_and_fix_columns(df: pd.DataFrame, plot_spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and fix column names in plot specification to match actual data"""
+    available_cols = list(df.columns)
+    fixed_spec = plot_spec.copy()
+    
+    def find_best_column(desired_name: str, column_type: str = None) -> str:
+        """Find the best matching column for the desired name"""
+        if not desired_name or desired_name == "null":
+            return None
+        
+        # Exact match first
+        if desired_name in available_cols:
+            return desired_name
+        
+        # Partial match based on keywords
+        desired_lower = desired_name.lower()
+        
+        # Common mappings for expected vs actual column names
+        column_mappings = {
+            "customer_segment": ["active", "activebool", "first_name", "customer_id"],
+            "total_revenue": ["total_revenue", "amount", "revenue", "sum"],
+            "revenue": ["total_revenue", "amount", "revenue", "sum"],
+            "month": ["month", "payment_date", "date"],
+            "rating": ["rating", "film_rating"],
+            "category": ["name", "category", "title"],
+            "film_rating": ["rating", "film_rating"]
+        }
+        
+        # Try mapping first
+        if desired_lower in column_mappings:
+            for candidate in column_mappings[desired_lower]:
+                for col in available_cols:
+                    if candidate.lower() in col.lower():
+                        return col
+        
+        # Fuzzy matching by type
+        if column_type == "numeric":
+            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+            if numeric_cols:
+                return numeric_cols[0]
+        elif column_type == "categorical":
+            categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+            if categorical_cols:
+                return categorical_cols[0]
+        
+        # Keyword-based fuzzy matching
+        for col in available_cols:
+            if any(keyword in col.lower() for keyword in desired_lower.split('_')):
+                return col
+        
+        # Last resort: return first available column of appropriate type
+        if column_type == "numeric":
+            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+            return numeric_cols[0] if numeric_cols else available_cols[0] if available_cols else None
+        elif column_type == "categorical":
+            categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+            return categorical_cols[0] if categorical_cols else available_cols[0] if available_cols else None
+        
+        return available_cols[0] if available_cols else None
+    
+    # Fix x_column
+    x_col = plot_spec.get("x_column")
+    if x_col and x_col not in available_cols:
+        fixed_x = find_best_column(x_col, "categorical")
+        if fixed_x:
+            fixed_spec["x_column"] = fixed_x
+            print(f"Fixed x_column: '{x_col}' → '{fixed_x}'")
+    
+    # Fix y_column  
+    y_col = plot_spec.get("y_column")
+    if y_col and y_col not in available_cols:
+        fixed_y = find_best_column(y_col, "numeric")
+        if fixed_y:
+            fixed_spec["y_column"] = fixed_y
+            print(f"Fixed y_column: '{y_col}' → '{fixed_y}'")
+    
+    # Fix color_column
+    color_col = plot_spec.get("color_column")
+    if color_col and color_col != "null" and color_col not in available_cols:
+        fixed_color = find_best_column(color_col, "categorical")
+        if fixed_color:
+            fixed_spec["color_column"] = fixed_color
+            print(f"Fixed color_column: '{color_col}' → '{fixed_color}'")
+        else:
+            fixed_spec["color_column"] = None
+    
+    return fixed_spec
+
+
 def _create_intelligent_figure(df: pd.DataFrame, plot_spec: Dict[str, Any]) -> go.Figure:
     """Create a plotly figure based on the intelligent plot specification"""
     
-    plot_type = plot_spec.get("plot_type")
-    x_col = plot_spec.get("x_column")
-    y_col = plot_spec.get("y_column") 
-    color_col = plot_spec.get("color_column")
-    barmode = plot_spec.get("barmode")
-    orientation = plot_spec.get("orientation", "v")
+    # Validate and fix column names first
+    fixed_spec = _validate_and_fix_columns(df, plot_spec)
+    
+    plot_type = fixed_spec.get("plot_type")
+    x_col = fixed_spec.get("x_column")
+    y_col = fixed_spec.get("y_column") 
+    color_col = fixed_spec.get("color_column")
+    barmode = fixed_spec.get("barmode")
+    orientation = fixed_spec.get("orientation", "v")
     
     # Handle None values
     color_col = color_col if color_col != "null" and color_col is not None else None
     barmode = barmode if barmode != "null" and barmode is not None else None
+    
+    # Additional safety check
+    if x_col not in df.columns:
+        print(f"Warning: x_column '{x_col}' not found, using first column")
+        x_col = df.columns[0] if len(df.columns) > 0 else None
+    
+    if y_col not in df.columns:
+        print(f"Warning: y_column '{y_col}' not found, using first numeric column")
+        numeric_cols = df.select_dtypes(include=['number']).columns
+        y_col = numeric_cols[0] if len(numeric_cols) > 0 else df.columns[1] if len(df.columns) > 1 else None
     
     try:
         if plot_type == "bar":
@@ -226,8 +330,18 @@ def _create_intelligent_figure(df: pd.DataFrame, plot_spec: Dict[str, Any]) -> g
         
     except Exception as e:
         # Return empty figure if creation fails
-        print(f"Figure creation failed: {e}")
-        return go.Figure()
+        print(f"Figure creation failed even after column fixing: {e}")
+        print(f"Available columns: {list(df.columns)}")
+        print(f"Attempted spec: x='{x_col}', y='{y_col}', color='{color_col}'")
+        
+        # Emergency fallback: create a simple table
+        try:
+            return go.Figure(data=[go.Table(
+                header=dict(values=list(df.columns)),
+                cells=dict(values=[df[col] for col in df.columns])
+            )])
+        except:
+            return go.Figure()
 
 
 def _generate_alternative_plots(data_characteristics: Dict[str, Any]) -> List[Dict[str, Any]]:
