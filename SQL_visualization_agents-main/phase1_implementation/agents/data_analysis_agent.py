@@ -11,6 +11,21 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+# Import SQL timeout utilities
+try:
+    from ..sql_timeout_handler import (
+        timeout_sql_execution, analyze_query_complexity, suggest_query_optimization,
+        create_safe_query_alternative, safe_sql_execution, SQLTimeoutError, logger
+    )
+except ImportError:
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+    from sql_timeout_handler import (
+        timeout_sql_execution, analyze_query_complexity, suggest_query_optimization,
+        create_safe_query_alternative, safe_sql_execution, SQLTimeoutError, logger
+    )
+
 # Load environment variables from .env file FIRST
 load_dotenv()
 
@@ -35,10 +50,36 @@ def _create_engine(database_url: str) -> Engine:
     return create_engine(database_url, pool_pre_ping=True, future=True)
 
 
+@timeout_sql_execution(timeout_seconds=120)  # 2 minute timeout
 def _execute_sql(engine: Engine, sql: str) -> pd.DataFrame:
-    """Execute SQL query and return DataFrame"""
+    """Execute SQL query and return DataFrame with timeout protection"""
+    logger.info(f"Executing SQL: {sql[:100]}...")
+    
+    # Analyze query complexity before execution
+    complexity = analyze_query_complexity(sql)
+    logger.info(f"Query complexity: {complexity['risk_level']} (score: {complexity['complexity_score']})")
+    
+    # If query is very risky, create a safer alternative
+    if complexity["risk_level"] == "very_high":
+        logger.warning("Query is very complex, creating safer alternative")
+        optimization = suggest_query_optimization(sql, complexity)
+        if optimization["should_warn_user"]:
+            logger.warning(f"Query optimization suggestions: {optimization['suggestions']}")
+            # Use the optimized query instead
+            sql = optimization["optimized_sql"]
+            logger.info(f"Using optimized SQL: {sql[:100]}...")
+    
     with engine.connect() as conn:
-        return pd.read_sql(text(sql), conn)
+        start_time = time.time()
+        try:
+            result = pd.read_sql(text(sql), conn)
+            elapsed = time.time() - start_time
+            logger.info(f"SQL executed successfully in {elapsed:.2f} seconds, returned {len(result)} rows")
+            return result
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"SQL execution failed after {elapsed:.2f} seconds: {e}")
+            raise
 
 
 def _score_dataframe(df: pd.DataFrame) -> float:
@@ -158,7 +199,7 @@ def _compute_basic_statistics(df: pd.DataFrame) -> Dict[str, Any]:
 # ============================================================================
 
 def execute_sql_candidates(state: DataAnalysisState) -> Dict[str, Any]:
-    """Node: Execute SQL candidates and select best result"""
+    """Node: Execute SQL candidates and select best result with timeout protection"""
     candidates = state.get("sql_candidates", [])
     
     # Try to find the database file
@@ -179,42 +220,108 @@ def execute_sql_candidates(state: DataAnalysisState) -> Dict[str, Any]:
             database_url = "sqlite:///example-reference/dvdrental.sqlite"
     
     if not candidates:
+        logger.warning("No SQL candidates provided for execution")
         return {
             "selected_sql": "",
-            "query_results": pd.DataFrame(),
+            "query_results": {},
             "data_quality_score": 0.0,
             "execution_errors": ["No SQL candidates provided"]
         }
     
+    logger.info(f"Executing {len(candidates)} SQL candidates")
     engine = _create_engine(database_url)
     best_result = {"score": -1.0, "sql": "", "df": pd.DataFrame()}
     execution_errors = []
+    timeout_occurred = False
     
     for i, sql in enumerate(candidates):
         try:
+            logger.info(f"Trying SQL candidate {i+1}/{len(candidates)}")
+            
+            # Pre-analyze complexity
+            complexity = analyze_query_complexity(sql)
+            logger.info(f"Candidate {i+1} complexity: {complexity['risk_level']}")
+            
+            # If the query is extremely complex, try a safer alternative first
+            if complexity["risk_level"] == "very_high":
+                logger.warning(f"Candidate {i+1} is very complex, trying safer alternative")
+                safe_sql = create_safe_query_alternative(sql)
+                
+                try:
+                    df = _execute_sql(engine, safe_sql)
+                    score = _score_dataframe(df)
+                    
+                    if score > best_result["score"]:
+                        best_result = {"score": score, "sql": safe_sql, "df": df}
+                        execution_errors.append(f"Used safer alternative for candidate {i+1} due to complexity")
+                    continue  # Skip the original complex query
+                    
+                except Exception as safe_e:
+                    logger.warning(f"Safer alternative also failed: {safe_e}")
+                    # Continue to try the original query
+            
+            # Execute the original query
             df = _execute_sql(engine, sql)
             score = _score_dataframe(df)
             
             if score > best_result["score"]:
                 best_result = {"score": score, "sql": sql, "df": df}
                 
+        except SQLTimeoutError as e:
+            timeout_occurred = True
+            error_msg = f"SQL candidate {i+1} timed out: {str(e)}"
+            logger.error(error_msg)
+            execution_errors.append(error_msg)
+            
+            # For timeout, suggest a much simpler query
+            try:
+                logger.info(f"Creating emergency fallback for candidate {i+1}")
+                emergency_sql = sql.replace("LIMIT 10000", "LIMIT 10").replace("GROUP BY", "-- GROUP BY")
+                if "GROUP BY" in emergency_sql:
+                    # Remove GROUP BY and aggregations for emergency query
+                    emergency_sql = f"SELECT * FROM ({sql.split('FROM')[0]} FROM {sql.split('FROM')[1].split('GROUP BY')[0]}) LIMIT 10"
+                
+                df = _execute_sql(engine, emergency_sql)
+                score = _score_dataframe(df) * 0.5  # Penalty for emergency query
+                
+                if score > best_result["score"]:
+                    best_result = {"score": score, "sql": emergency_sql, "df": df}
+                    execution_errors.append(f"Used emergency fallback for timed-out candidate {i+1}")
+                    
+            except Exception as emergency_e:
+                logger.error(f"Emergency fallback also failed: {emergency_e}")
+                execution_errors.append(f"Emergency fallback for candidate {i+1} also failed")
+            
+            continue
+            
         except Exception as e:
-            execution_errors.append(f"SQL candidate {i+1} failed: {str(e)}")
+            error_msg = f"SQL candidate {i+1} failed: {str(e)}"
+            logger.error(error_msg)
+            execution_errors.append(error_msg)
             continue
     
+    # Prepare results
     if best_result["score"] > 0:
-        return {
+        logger.info(f"Successfully executed SQL with quality score: {best_result['score']:.2f}")
+        result = {
             "selected_sql": best_result["sql"],
             "query_results": dataframe_to_dict(best_result["df"]),
             "data_quality_score": best_result["score"],
             "execution_errors": execution_errors
         }
+        
+        if timeout_occurred:
+            result["warnings"] = ["Some queries timed out due to complexity. Results may be simplified."]
+        
+        return result
     else:
+        logger.error("All SQL candidates failed to execute")
         return {
             "selected_sql": candidates[0] if candidates else "",
             "query_results": dataframe_to_dict(pd.DataFrame()),
             "data_quality_score": 0.0,
-            "execution_errors": execution_errors + ["All SQL candidates failed to execute"]
+            "execution_errors": execution_errors + ["All SQL candidates failed to execute"],
+            "warnings": ["Query too complex - consider simplifying your request"] if timeout_occurred else []
         }
 
 
