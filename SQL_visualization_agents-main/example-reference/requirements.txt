@@ -1,0 +1,36 @@
+python-dotenv
+openai>=1.0.0
+httpx
+langgraph
+langchain
+langchain-openai
+langchain-community
+
+# web + research
+requests
+beautifulsoup4
+duckduckgo-search
+tavily-python
+
+# database access
+sqlalchemy
+psycopg2-binary
+
+# async sqlite checkpointing
+aiosqlite
+
+# visualization / notebooks / dev
+pandas
+numpy
+matplotlib
+seaborn
+plotly
+ipython
+pygments
+jupyterlab
+
+# graph rendering helpers (optional, for graph.draw_png())
+pydot
+graphviz
+
+gradio

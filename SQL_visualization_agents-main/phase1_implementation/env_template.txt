@@ -1,0 +1,22 @@
+# DVD Rental SQL Visualization System - Environment Configuration
+# Copy this content to a .env file and fill in your actual values
+
+# Required: OpenAI API Key for LLM functionality
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Optional: Database URL (if not using default SQLite path)
+# DATABASE_URL=sqlite:///path/to/your/dvdrental.sqlite
+
+# Optional: LangSmith Tracing (for visualization and debugging)
+# Sign up at https://smith.langchain.com/ to get your API key
+LANGSMITH_API_KEY=your_langsmith_api_key_here
+LANGSMITH_PROJECT=dvd-rental-sql-viz
+
+# Optional: LangSmith Configuration
+# LANGCHAIN_TRACING_V2=true  # This is set automatically when LANGSMITH_API_KEY is present
+# LANGCHAIN_API_KEY=your_langsmith_api_key_here  # This is set automatically
+# LANGCHAIN_PROJECT=dvd-rental-sql-viz  # This is set automatically
+
+# Example values (do not use these actual keys):
+# OPENAI_API_KEY=sk-1234567890abcdef1234567890abcdef
+# LANGSMITH_API_KEY=ls_1234567890abcdef1234567890abcdef

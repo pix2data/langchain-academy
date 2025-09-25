@@ -1,0 +1,47 @@
+# Phase 1 Implementation Requirements
+# Based on existing example-reference requirements with LangGraph additions
+
+# Core LangGraph and LangChain
+langgraph
+langchain
+langchain-openai
+langchain-community
+langchain-core
+
+# LangSmith for tracing and observability
+langsmith
+
+# Environment and configuration
+python-dotenv>=0.19.0
+
+# Database access
+sqlalchemy
+psycopg2-binary
+aiosqlite
+
+# Data manipulation and analysis
+pandas
+numpy
+
+# Visualization
+plotly
+matplotlib
+seaborn
+
+# HTTP and async support
+httpx
+requests
+
+# Development and testing
+ipython
+jupyter
+jupyterlab
+
+# Type hints (for Python < 3.10)
+typing-extensions
+
+# Optional: Web interface
+gradio
+
+# Pydantic (typically comes with LangChain but explicit for clarity)
+pydantic>=2.0

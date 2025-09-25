@@ -1,0 +1,36 @@
+# DVD Rental Database Test Queries for Phase 1 Implementation
+# Each line is a separate query - comments start with #
+
+# Revenue and Financial Analysis
+Show me the top 10 grossing film categories
+What are the total payment amounts by month?
+Which films generate the most rental revenue?
+Compare revenue between the two stores
+
+# Customer Analysis  
+What is the rental frequency distribution among customers?
+Who are the top 10 customers by total rentals?
+Show customer activity by country
+What is the average number of rentals per customer?
+
+# Film and Inventory Analysis
+Which film categories are most popular?
+Show the distribution of film ratings (G, PG, R, etc.)
+What are the most frequently rented films?
+Which actors appear in the most films?
+
+# Store and Staff Performance
+Compare rental performance between stores
+Show staff member rental processing statistics
+What is the inventory distribution by store?
+
+# Temporal Analysis
+Show rental trends over time
+What are the peak rental months?
+Compare daily rental patterns
+
+# Basic Data Exploration
+How many films are in each category?
+What is the average film length by category?
+Show the distribution of rental durations
+What languages are available for films?
